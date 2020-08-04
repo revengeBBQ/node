@@ -58,12 +58,14 @@ V8_EXPORT_PRIVATE
 WasmCode* CompileImportWrapper(
     WasmEngine* wasm_engine, NativeModule* native_module, Counters* counters,
     compiler::WasmImportCallKind kind, const FunctionSig* sig,
-    WasmImportWrapperCache::ModificationScope* cache_scope);
+    int expected_arity, WasmImportWrapperCache::ModificationScope* cache_scope);
 
 // Triggered by the WasmCompileLazy builtin. The return value indicates whether
 // compilation was successful. Lazy compilation can fail only if validation is
 // also lazy.
 bool CompileLazy(Isolate*, NativeModule*, int func_index);
+
+void TriggerTierUp(Isolate*, NativeModule*, int func_index);
 
 int GetMaxBackgroundTasks();
 
@@ -75,7 +77,7 @@ class WrapperQueue {
   // Thread-safe.
   base::Optional<Key> pop() {
     base::Optional<Key> key = base::nullopt;
-    base::LockGuard<base::Mutex> lock(&mutex_);
+    base::MutexGuard lock(&mutex_);
     auto it = queue_.begin();
     if (it != queue_.end()) {
       key = *it;
@@ -88,6 +90,11 @@ class WrapperQueue {
   // successful.
   // Not thread-safe.
   bool insert(const Key& key) { return queue_.insert(key).second; }
+
+  size_t size() {
+    base::MutexGuard lock(&mutex_);
+    return queue_.size();
+  }
 
  private:
   base::Mutex mutex_;

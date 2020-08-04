@@ -8,6 +8,7 @@
 #include "src/execution/isolate.h"
 #include "src/handles/handles-inl.h"
 #include "src/heap/factory.h"
+#include "src/heap/memory-allocator.h"
 #include "src/heap/spaces.h"
 #include "src/libsampler/sampler.h"
 #include "test/cctest/cctest.h"
@@ -97,9 +98,9 @@ TEST(CodeRangeCorrectContents) {
   // We should only have the code range and the embedded code range.
   CHECK_EQ(2, pages->size());
   CHECK(PagesHasExactPage(pages, code_range.begin(), code_range.size()));
-  CHECK(PagesHasExactPage(pages,
-                          reinterpret_cast<Address>(i_isolate->embedded_blob()),
-                          i_isolate->embedded_blob_size()));
+  CHECK(PagesHasExactPage(
+      pages, reinterpret_cast<Address>(i_isolate->embedded_blob_code()),
+      i_isolate->embedded_blob_code_size()));
 }
 
 TEST(CodePagesCorrectContents) {
@@ -119,9 +120,9 @@ TEST(CodePagesCorrectContents) {
 
   // We should have the embedded code range even when there is no regular code
   // range.
-  CHECK(PagesHasExactPage(pages,
-                          reinterpret_cast<Address>(i_isolate->embedded_blob()),
-                          i_isolate->embedded_blob_size()));
+  CHECK(PagesHasExactPage(
+      pages, reinterpret_cast<Address>(i_isolate->embedded_blob_code()),
+      i_isolate->embedded_blob_code_size()));
 }
 
 TEST(OptimizedCodeWithCodeRange) {

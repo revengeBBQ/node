@@ -16,7 +16,7 @@ namespace internal {
 Handle<ScriptContextTable> ScriptContextTable::Extend(
     Handle<ScriptContextTable> table, Handle<Context> script_context) {
   Handle<ScriptContextTable> result;
-  int used = table->used();
+  int used = table->synchronized_used();
   int length = table->length();
   CHECK(used >= 0 && length > 0 && used < length);
   if (used + kFirstContextSlotIndex == length) {
@@ -29,10 +29,10 @@ Handle<ScriptContextTable> ScriptContextTable::Extend(
   } else {
     result = table;
   }
-  result->set_used(used + 1);
-
   DCHECK(script_context->IsScriptContext());
   result->set(used + kFirstContextSlotIndex, *script_context);
+
+  result->synchronized_set_used(used + 1);
   return result;
 }
 
@@ -51,7 +51,7 @@ bool ScriptContextTable::Lookup(Isolate* isolate, ScriptContextTable table,
   DisallowHeapAllocation no_gc;
   // Static variables cannot be in script contexts.
   IsStaticFlag is_static_flag;
-  for (int i = 0; i < table.used(); i++) {
+  for (int i = 0; i < table.synchronized_used(); i++) {
     Context context = table.get_context(i);
     DCHECK(context.IsScriptContext());
     int slot_index = ScopeInfo::ContextSlotIndex(
@@ -159,13 +159,13 @@ static Maybe<bool> UnscopableLookup(LookupIterator* it, bool is_with_context) {
                               isolate->factory()->unscopables_symbol()),
       Nothing<bool>());
   if (!unscopables->IsJSReceiver()) return Just(true);
-  Handle<Object> blacklist;
+  Handle<Object> blocklist;
   ASSIGN_RETURN_ON_EXCEPTION_VALUE(
-      isolate, blacklist,
+      isolate, blocklist,
       JSReceiver::GetProperty(isolate, Handle<JSReceiver>::cast(unscopables),
                               it->name()),
       Nothing<bool>());
-  return Just(!blacklist->BooleanValue(isolate));
+  return Just(!blocklist->BooleanValue(isolate));
 }
 
 static PropertyAttributes GetAttributesForMode(VariableMode mode) {
@@ -377,12 +377,12 @@ Handle<Object> Context::Lookup(Handle<Context> context, Handle<String> name,
         }
       }
 
-      // Check blacklist. Names that are listed, cannot be resolved further.
-      Object blacklist = context->get(BLACK_LIST_INDEX);
-      if (blacklist.IsStringSet() &&
-          StringSet::cast(blacklist).Has(isolate, name)) {
+      // Check blocklist. Names that are listed, cannot be resolved further.
+      Object blocklist = context->get(BLOCK_LIST_INDEX);
+      if (blocklist.IsStringSet() &&
+          StringSet::cast(blocklist).Has(isolate, name)) {
         if (FLAG_trace_contexts) {
-          PrintF(" - name is blacklisted. Aborting.\n");
+          PrintF(" - name is blocklisted. Aborting.\n");
         }
         break;
       }

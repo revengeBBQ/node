@@ -11,6 +11,7 @@
 #include "src/base/platform/elapsed-timer.h"
 #include "src/codegen/assembler-inl.h"
 #include "src/utils/utils.h"
+#include "src/wasm/wasm-opcodes-inl.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/compiler/value-helper.h"
 #include "test/cctest/wasm/wasm-run-utils.h"
@@ -723,8 +724,28 @@ WASM_EXEC_TEST(Select_float_parameters) {
   CHECK_FLOAT_EQ(2.0f, r.Call(2.0f, 1.0f, 1));
 }
 
+WASM_EXEC_TEST(Select_s128_parameters) {
+  WasmRunner<int32_t, int32_t> r(execution_tier);
+  int32_t* g0 = r.builder().AddGlobal<int32_t>(kWasmS128);
+  int32_t* g1 = r.builder().AddGlobal<int32_t>(kWasmS128);
+  int32_t* output = r.builder().AddGlobal<int32_t>(kWasmS128);
+  // select(v128(0, 1, 2, 3), v128(4, 5, 6, 7), 1) == v128(0, 1, 2, 3)
+  for (int i = 0; i < 4; i++) {
+    WriteLittleEndianValue<int32_t>(&g0[i], i);
+    WriteLittleEndianValue<int32_t>(&g1[i], i + 4);
+  }
+  BUILD(r,
+        WASM_SET_GLOBAL(2, WASM_SELECT(WASM_GET_GLOBAL(0), WASM_GET_GLOBAL(1),
+                                       WASM_GET_LOCAL(0))),
+        WASM_ONE);
+  r.Call(1);
+  for (int i = 0; i < 4; i++) {
+    CHECK_EQ(i, ReadLittleEndianValue<int32_t>(&output[i]));
+  }
+}
+
 WASM_EXEC_TEST(SelectWithType_float_parameters) {
-  EXPERIMENTAL_FLAG_SCOPE(anyref);
+  EXPERIMENTAL_FLAG_SCOPE(reftypes);
   WasmRunner<float, float, float, int32_t> r(execution_tier);
   BUILD(r,
         WASM_SELECT_F(WASM_GET_LOCAL(0), WASM_GET_LOCAL(1), WASM_GET_LOCAL(2)));
@@ -742,7 +763,7 @@ WASM_EXEC_TEST(Select) {
 }
 
 WASM_EXEC_TEST(SelectWithType) {
-  EXPERIMENTAL_FLAG_SCOPE(anyref);
+  EXPERIMENTAL_FLAG_SCOPE(reftypes);
   WasmRunner<int32_t, int32_t> r(execution_tier);
   // return select(11, 22, a);
   BUILD(r, WASM_SELECT_I(WASM_I32V_1(11), WASM_I32V_1(22), WASM_GET_LOCAL(0)));
@@ -763,7 +784,7 @@ WASM_EXEC_TEST(Select_strict1) {
 }
 
 WASM_EXEC_TEST(SelectWithType_strict1) {
-  EXPERIMENTAL_FLAG_SCOPE(anyref);
+  EXPERIMENTAL_FLAG_SCOPE(reftypes);
   WasmRunner<int32_t, int32_t> r(execution_tier);
   // select(a=0, a=1, a=2); return a
   BUILD(r,
@@ -788,7 +809,7 @@ WASM_EXEC_TEST(Select_strict2) {
 }
 
 WASM_EXEC_TEST(SelectWithType_strict2) {
-  EXPERIMENTAL_FLAG_SCOPE(anyref);
+  EXPERIMENTAL_FLAG_SCOPE(reftypes);
   WasmRunner<int32_t, int32_t> r(execution_tier);
   r.AllocateLocal(kWasmI32);
   r.AllocateLocal(kWasmI32);
@@ -816,7 +837,7 @@ WASM_EXEC_TEST(Select_strict3) {
 }
 
 WASM_EXEC_TEST(SelectWithType_strict3) {
-  EXPERIMENTAL_FLAG_SCOPE(anyref);
+  EXPERIMENTAL_FLAG_SCOPE(reftypes);
   WasmRunner<int32_t, int32_t> r(execution_tier);
   r.AllocateLocal(kWasmI32);
   r.AllocateLocal(kWasmI32);
@@ -1034,18 +1055,6 @@ WASM_EXEC_TEST(BrTable_loop_target) {
   r.Build(code, code + arraysize(code));
 
   CHECK_EQ(1, r.Call(0));
-}
-
-WASM_EXEC_TEST(BrTableMeetBottom) {
-  EXPERIMENTAL_FLAG_SCOPE(anyref);
-  WasmRunner<int32_t> r(execution_tier);
-  BUILD(r,
-        WASM_BLOCK_I(WASM_STMTS(
-            WASM_BLOCK_F(WASM_STMTS(
-                WASM_UNREACHABLE, WASM_BR_TABLE(WASM_I32V_1(1), 2, BR_TARGET(0),
-                                                BR_TARGET(1), BR_TARGET(1)))),
-            WASM_DROP, WASM_I32V_1(14))));
-  CHECK_TRAP(r.Call());
 }
 
 WASM_EXEC_TEST(F32ReinterpretI32) {
@@ -1995,11 +2004,11 @@ WASM_EXEC_TEST(Infinite_Loop_not_taken2_brif) {
 
 static void TestBuildGraphForSimpleExpression(WasmOpcode opcode) {
   Isolate* isolate = CcTest::InitIsolateOnce();
-  Zone zone(isolate->allocator(), ZONE_NAME);
+  Zone zone(isolate->allocator(), ZONE_NAME, kCompressGraphZone);
   HandleScope scope(isolate);
-  // TODO(ahaas): Enable this test for anyref opcodes when code generation for
-  // them is implemented.
-  if (WasmOpcodes::IsAnyRefOpcode(opcode)) return;
+  // TODO(ahaas): Enable this test for externref opcodes when code generation
+  // for them is implemented.
+  if (WasmOpcodes::IsExternRefOpcode(opcode)) return;
   // Enable all optional operators.
   compiler::CommonOperatorBuilder common(&zone);
   compiler::MachineOperatorBuilder machine(
@@ -3760,6 +3769,15 @@ TEST(Liftoff_tier_up) {
     // Second run should now execute {sub}.
     CHECK_EQ(4, r.Call(11, 7));
   }
+}
+
+TEST(Regression_1085507) {
+  EXPERIMENTAL_FLAG_SCOPE(mv);
+  WasmRunner<int32_t> r(ExecutionTier::kInterpreter);
+  TestSignatures sigs;
+  uint32_t sig_v_i = r.builder().AddSignature(sigs.v_i());
+  BUILD(r, WASM_I32V_1(0), kExprIf, kLocalVoid, WASM_UNREACHABLE,
+        WASM_BLOCK_X(sig_v_i, kExprDrop), kExprElse, kExprEnd, WASM_I32V_1(0));
 }
 
 #undef B1
